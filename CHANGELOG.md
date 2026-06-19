@@ -6,6 +6,14 @@ Changelog items are created for major and minor releases, but not bugfix ones fo
 Currently, the focus is on implementing the high-level V4L2 single-planar API.
 Multi-planar capture will not be targeted in the near future unless someone else starts working on it.
 
+## Unreleased
+
+### Added
+
+- Add hardware-backed MMAP stream interruption tests covering targeted `EINTR` delivery.
+- Support physical and `vivid` virtual V4L2 capture devices in the interrupt tests.
+- Add `V4L_INTERRUPT_TEST_SOURCE=physical|vivid|both` to select which interrupt-test device sources are attempted.
+
 ## [0.14.0] - 2023-05-13
 
 ### Added

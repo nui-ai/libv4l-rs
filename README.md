@@ -33,6 +33,29 @@ You have the choice between two dependencies (both provided by this crate intern
 
 Enable either the `libv4l` or the `v4l2` backend by choosing the it as feature for this crate.
 
+## Integration tests
+
+Some integration tests exercise real V4L2 streaming behavior and therefore need a capture device.
+The `interrupts` test target can use either a physical camera or Linux's in-kernel `vivid`
+Virtual Video Test Driver.
+
+By default, the interrupt tests attempt both physical and vivid capture devices and skip any
+source that is not available. Set `V4L_INTERRUPT_TEST_SOURCE` to control this:
+
+```shell
+V4L_INTERRUPT_TEST_SOURCE=physical cargo test --test interrupts -- --show-output
+V4L_INTERRUPT_TEST_SOURCE=vivid cargo test --test interrupts -- --show-output
+V4L_INTERRUPT_TEST_SOURCE=both cargo test --test interrupts -- --show-output
+```
+
+For a virtual capture device on Linux, load `vivid` before running the vivid tests:
+
+```shell
+sudo modprobe vivid n_devs=1 node_types=0x1
+cargo test --test interrupts -- --show-output
+sudo modprobe -r vivid
+```
+
 ## Usage
 
 Below you can find a quick example usage of this crate. It introduces the basics necessary to do frame capturing from a streaming device (e.g. webcam).

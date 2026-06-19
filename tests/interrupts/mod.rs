@@ -13,6 +13,12 @@
 //! sets: non-`vivid` capture devices for the physical path and `vivid` capture devices
 //! for the virtual path.
 //!
+//! # Signal test serialization
+//!
+//! Signal tests are serialized by `SIGNAL_TEST_LOCK` because the signal handler
+//! is process-global. This is intentional even though Rust may otherwise run
+//! tests in parallel.
+//!
 //! # Setting up a vivid virtual camera device
 //!
 //! On Ubuntu, `vivid` is usually shipped as a kernel module.
@@ -59,4 +65,70 @@
 //! it is not required if `sudo modprobe vivid ...` succeeds.
 
 mod helpers;
-mod mmap_stream_next_can_be_interrupted_by_a_targeted_signal;
+mod mmap_stream;
+
+use std::io;
+
+use crate::helpers::DeviceSource;
+use crate::mmap_stream::{
+    mmap_stream_next_after_interrupted_next_exposes_queue_state_loss,
+    mmap_stream_next_can_be_interrupted_by_a_targeted_signal, FrameCollectionConfig,
+    InterruptInjection, DEFAULT_POST_READY_FRAME_COUNT, MIN_POST_READY_FRAME_COUNT,
+};
+
+#[test]
+fn physical_mmap_stream_next_can_be_interrupted_by_a_targeted_signal() {
+    mmap_stream_next_can_be_interrupted_by_a_targeted_signal(DeviceSource::Physical);
+}
+
+#[test]
+fn vivid_mmap_stream_next_can_be_interrupted_by_a_targeted_signal() {
+    mmap_stream_next_can_be_interrupted_by_a_targeted_signal(DeviceSource::Vivid);
+}
+
+#[test]
+fn physical_mmap_stream_next_after_interrupted_next_exposes_queue_state_loss() {
+    mmap_stream_next_after_interrupted_next_exposes_queue_state_loss(
+        DeviceSource::Physical,
+        InterruptInjection::Enabled,
+        FrameCollectionConfig::try_new(DEFAULT_POST_READY_FRAME_COUNT)
+            .expect("valid frame collection config"),
+    );
+}
+
+#[test]
+fn vivid_mmap_stream_next_after_interrupted_next_exposes_queue_state_loss() {
+    mmap_stream_next_after_interrupted_next_exposes_queue_state_loss(
+        DeviceSource::Vivid,
+        InterruptInjection::Enabled,
+        FrameCollectionConfig::try_new(DEFAULT_POST_READY_FRAME_COUNT)
+            .expect("valid frame collection config"),
+    );
+}
+
+#[test]
+fn physical_mmap_stream_next_without_interrupt_collects_ordered_frames() {
+    mmap_stream_next_after_interrupted_next_exposes_queue_state_loss(
+        DeviceSource::Physical,
+        InterruptInjection::Disabled,
+        FrameCollectionConfig::try_new(DEFAULT_POST_READY_FRAME_COUNT)
+            .expect("valid frame collection config"),
+    );
+}
+
+#[test]
+fn vivid_mmap_stream_next_without_interrupt_collects_ordered_frames() {
+    mmap_stream_next_after_interrupted_next_exposes_queue_state_loss(
+        DeviceSource::Vivid,
+        InterruptInjection::Disabled,
+        FrameCollectionConfig::try_new(DEFAULT_POST_READY_FRAME_COUNT)
+            .expect("valid frame collection config"),
+    );
+}
+
+#[test]
+fn mmap_stream_post_ready_frame_config_rejects_count_too_small_to_check_ordering() {
+    let err = FrameCollectionConfig::try_new(MIN_POST_READY_FRAME_COUNT - 1)
+        .expect_err("too few frames cannot prove ordering");
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+}

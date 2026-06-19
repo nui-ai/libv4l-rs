@@ -1,7 +1,7 @@
 use std::io;
 use std::mem;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
 use v4l::buffer::Type;
@@ -11,8 +11,10 @@ use v4l::device::Device;
 use v4l::io::mmap::Stream;
 use v4l::io::traits::CaptureStream;
 
+pub(crate) const SOURCE_SELECTION_ENV: &str = "V4L_INTERRUPT_TEST_SOURCE";
 pub(crate) const INTERRUPT_SIGNAL: libc::c_int = libc::SIGUSR1;
 pub(crate) static SIGNAL_TEST_LOCK: Mutex<()> = Mutex::new(());
+static SOURCE_SELECTION_LOG: Once = Once::new();
 
 extern "C" fn handle_interrupt_signal(_: libc::c_int) {}
 
@@ -32,6 +34,13 @@ pub(crate) enum DeviceSource {
     Vivid,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum SourceSelection {
+    Physical,
+    Vivid,
+    Both,
+}
+
 impl DeviceSource {
     pub(crate) fn description(self) -> &'static str {
         match self {
@@ -46,6 +55,62 @@ impl DeviceSource {
             Self::Vivid => driver == "vivid",
         }
     }
+}
+
+impl SourceSelection {
+    fn from_env_value(value: &str) -> Self {
+        match value {
+            "physical" => Self::Physical,
+            "vivid" => Self::Vivid,
+            "both" => Self::Both,
+            value => panic!(
+                "unsupported {}={:?}; expected one of: physical, vivid, both",
+                SOURCE_SELECTION_ENV, value
+            ),
+        }
+    }
+
+    fn allows(self, source: DeviceSource) -> bool {
+        matches!(
+            (self, source),
+            (Self::Physical, DeviceSource::Physical)
+                | (Self::Vivid, DeviceSource::Vivid)
+                | (Self::Both, _)
+        )
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Physical => "a physical camera device",
+            Self::Vivid => "a vivid virtual camera device",
+            Self::Both => "both a physical and a vivid camera device",
+        }
+    }
+}
+
+pub(crate) fn source_selection_allows(source: DeviceSource) -> bool {
+    let (selection, configured_value) = match std::env::var(SOURCE_SELECTION_ENV) {
+        Ok(value) => (SourceSelection::from_env_value(&value), Some(value)),
+        Err(std::env::VarError::NotPresent) => (SourceSelection::Both, None),
+        Err(std::env::VarError::NotUnicode(value)) => {
+            panic!(
+                "{} must be valid UTF-8, got {:?}",
+                SOURCE_SELECTION_ENV, value
+            )
+        }
+    };
+
+    SOURCE_SELECTION_LOG.call_once(|| match configured_value.as_deref() {
+        Some(value) => eprintln!(
+            "Interrupt tests are using {SOURCE_SELECTION_ENV}={value}; they will try {}. Other available values are: physical, vivid, both.",
+            selection.description()
+        ),
+        None => eprintln!(
+            "Interrupt tests will try both physical and vivid camera devices. Set {SOURCE_SELECTION_ENV}=physical|vivid|both to limit the device source.",
+        ),
+    });
+
+    selection.allows(source)
 }
 
 impl SignalGuard {
@@ -81,7 +146,7 @@ impl SignalGuard {
         }
     }
 
-    fn unblock_test_signal_on_current_thread(&self) -> io::Result<()> {
+    pub(crate) fn unblock_test_signal_on_current_thread(&self) -> io::Result<()> {
         unsafe {
             let mut unblocked: libc::sigset_t = mem::zeroed();
             cvt(libc::sigemptyset(&mut unblocked))?;
@@ -183,6 +248,32 @@ pub(crate) fn capture_streaming_devices(source: DeviceSource) -> Vec<std::path::
         .collect()
 }
 
+pub(crate) fn capture_streaming_devices_or_skip(
+    source: DeviceSource,
+    test_name: &str,
+) -> Option<Vec<std::path::PathBuf>> {
+    let device_paths = capture_streaming_devices(source);
+    if !device_paths.is_empty() {
+        return Some(device_paths);
+    }
+
+    match source {
+        DeviceSource::Physical => {
+            eprintln!(
+                "skipping {test_name}: no {} /dev/video* device found",
+                source.description()
+            );
+            None
+        }
+        DeviceSource::Vivid => {
+            panic!(
+                "no {} /dev/video* device found for {test_name}. The vivid-backed interrupt tests expect the Linux vivid virtual camera to be loaded; see tests/interrupts/mod.rs, section \"Setting up a vivid virtual camera device\". On Ubuntu this is usually: sudo modprobe vivid n_devs=1 node_types=0x1, then verify with v4l2-ctl --list-devices. To avoid vivid in this run, set {SOURCE_SELECTION_ENV}=physical.",
+                source.description()
+            );
+        }
+    }
+}
+
 fn cvt(ret: libc::c_int) -> io::Result<()> {
     if ret == 0 {
         Ok(())
@@ -191,7 +282,7 @@ fn cvt(ret: libc::c_int) -> io::Result<()> {
     }
 }
 
-fn open_first_mmap_capture_stream(
+pub(crate) fn open_first_mmap_capture_stream(
     device_paths: Vec<std::path::PathBuf>,
 ) -> io::Result<(std::path::PathBuf, Stream<'static>)> {
     let mut errors = Vec::new();
