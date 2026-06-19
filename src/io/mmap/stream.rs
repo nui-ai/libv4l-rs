@@ -187,7 +187,7 @@ impl<'a, 'b> CaptureStream<'b> for Stream<'a> {
         Ok(self.arena_index)
     }
 
-    fn next(&'b mut self) -> io::Result<(&Self::Item, &Metadata)> {
+    fn next(&'b mut self) -> io::Result<(&'b Self::Item, &'b Metadata)> {
         if !self.active {
             // Enqueue all buffers once on stream start
             for index in 0..self.arena.bufs.len() {
@@ -266,7 +266,7 @@ impl<'a, 'b> OutputStream<'b> for Stream<'a> {
         Ok(self.arena_index)
     }
 
-    fn next(&'b mut self) -> io::Result<(&mut Self::Item, &mut Metadata)> {
+    fn next(&'b mut self) -> io::Result<(&'b mut Self::Item, &'b mut Metadata)> {
         let init = !self.active;
         if !self.active {
             self.start()?;

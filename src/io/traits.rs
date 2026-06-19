@@ -22,7 +22,7 @@ pub trait CaptureStream<'a>: Stream {
 
     /// Fetch a new frame by first queueing and then dequeueing.
     /// First time initialization is performed if necessary.
-    fn next(&'a mut self) -> io::Result<(&Self::Item, &Metadata)>;
+    fn next(&'a mut self) -> io::Result<(&'a Self::Item, &'a Metadata)>;
 }
 
 pub trait OutputStream<'a>: Stream {
@@ -34,5 +34,5 @@ pub trait OutputStream<'a>: Stream {
 
     /// Dump a new frame by first queueing and then dequeueing.
     /// First time initialization is performed if necessary.
-    fn next(&'a mut self) -> io::Result<(&mut Self::Item, &mut Metadata)>;
+    fn next(&'a mut self) -> io::Result<(&'a mut Self::Item, &'a mut Metadata)>;
 }

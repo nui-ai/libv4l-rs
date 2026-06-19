@@ -29,3 +29,7 @@ members = [
     "v4l-sys",
     "v4l2-sys",
 ]
+
+[[test]]
+name = "interrupts"
+path = "tests/interrupts/mod.rs"
