@@ -1,7 +1,9 @@
 //! Hardware-backed EINTR scaffold for MMAP capture streams.
 //!
-//! This test is ignored by default because it needs a real V4L2 capture device
-//! and sends a process signal. Run explicitly with:
+//! This test is ignored by default because it needs a V4L2 capture device
+//! and sends a process signal. For repeatable local/CI runs, prefer Linux
+//! `vivid` (the in-kernel Virtual Video Test Driver) over physical cameras.
+//! Run explicitly with:
 //! `cargo test --test interrupts -- --ignored --nocapture`.
 
 use std::io;
@@ -91,12 +93,29 @@ fn cvt(ret: libc::c_int) -> io::Result<()> {
     }
 }
 
+fn preferred_capture_device() -> Option<std::path::PathBuf> {
+    let devices = context::enum_devices();
+
+    devices
+        .iter()
+        .find(|node| {
+            node.name()
+                .map(|name| {
+                    let name = name.to_ascii_lowercase();
+                    name.contains("vivid") || name.contains("virtual video test driver")
+                })
+                .unwrap_or(false)
+        })
+        .or_else(|| devices.first())
+        .map(|node| node.path().to_owned())
+}
+
 #[test]
-#[ignore = "requires a real V4L2 capture device and deliberately sends SIGUSR1"]
+#[ignore = "requires a V4L2 capture device and deliberately sends SIGUSR1"]
 fn mmap_stream_next_can_be_interrupted_by_a_targeted_signal() {
     let guard = Arc::new(SignalGuard::install().expect("install non-restarting signal handler"));
-    let device_path = match context::enum_devices().into_iter().next() {
-        Some(node) => node.path().to_owned(),
+    let device_path = match preferred_capture_device() {
+        Some(path) => path,
         None => {
             eprintln!("skipping EINTR test: no /dev/video* devices found");
             return;
