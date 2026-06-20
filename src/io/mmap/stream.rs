@@ -30,6 +30,11 @@ pub struct Stream<'a> {
     active: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StreamNextStats {
+    pub interrupted_wait_retries: u64,
+}
+
 impl<'a> Stream<'a> {
     /// Returns a stream for frame capturing
     ///
@@ -124,6 +129,7 @@ impl<'a> Stream<'a> {
     fn ioctl_until<T, F>(
         deadline: Deadline,
         timeout_context: &'static str,
+        stats: &mut StreamNextStats,
         mut op: F,
     ) -> io::Result<T>
     where
@@ -132,6 +138,7 @@ impl<'a> Stream<'a> {
         loop {
             match op() {
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                    stats.interrupted_wait_retries += 1;
                     if deadline.expired() {
                         return Err(io::Error::new(io::ErrorKind::TimedOut, timeout_context));
                     }
@@ -146,6 +153,7 @@ impl<'a> Stream<'a> {
         events: i16,
         deadline: Deadline,
         timeout_context: &'static str,
+        stats: &mut StreamNextStats,
     ) -> io::Result<()> {
         loop {
             let timeout = deadline.poll_timeout();
@@ -153,6 +161,7 @@ impl<'a> Stream<'a> {
                 Ok(0) => return Err(io::Error::new(io::ErrorKind::TimedOut, timeout_context)),
                 Ok(_) => return Ok(()),
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                    stats.interrupted_wait_retries += 1;
                     if deadline.expired() {
                         return Err(io::Error::new(io::ErrorKind::TimedOut, timeout_context));
                     }
@@ -162,8 +171,8 @@ impl<'a> Stream<'a> {
         }
     }
 
-    fn start_until(&mut self, deadline: Deadline) -> io::Result<()> {
-        Self::ioctl_until(deadline, "VIDIOC_STREAMON", || unsafe {
+    fn start_until(&mut self, deadline: Deadline, stats: &mut StreamNextStats) -> io::Result<()> {
+        Self::ioctl_until(deadline, "VIDIOC_STREAMON", stats, || unsafe {
             let mut typ = self.buf_type as u32;
             v4l2::ioctl(
                 self.handle.fd(),
@@ -176,8 +185,8 @@ impl<'a> Stream<'a> {
         Ok(())
     }
 
-    fn stop_until(&mut self, deadline: Deadline) -> io::Result<()> {
-        Self::ioctl_until(deadline, "VIDIOC_STREAMOFF", || unsafe {
+    fn stop_until(&mut self, deadline: Deadline, stats: &mut StreamNextStats) -> io::Result<()> {
+        Self::ioctl_until(deadline, "VIDIOC_STREAMOFF", stats, || unsafe {
             let mut typ = self.buf_type as u32;
             v4l2::ioctl(
                 self.handle.fd(),
@@ -191,13 +200,18 @@ impl<'a> Stream<'a> {
         Ok(())
     }
 
-    fn queue_capture_until(&mut self, index: usize, deadline: Deadline) -> io::Result<()> {
+    fn queue_capture_until(
+        &mut self,
+        index: usize,
+        deadline: Deadline,
+        stats: &mut StreamNextStats,
+    ) -> io::Result<()> {
         let mut v4l2_buf = v4l2_buffer {
             index: index as u32,
             ..self.buffer_desc()
         };
 
-        Self::ioctl_until(deadline, "VIDIOC_QBUF", || unsafe {
+        Self::ioctl_until(deadline, "VIDIOC_QBUF", stats, || unsafe {
             v4l2::ioctl(
                 self.handle.fd(),
                 v4l2::vidioc::VIDIOC_QBUF,
@@ -209,7 +223,12 @@ impl<'a> Stream<'a> {
         Ok(())
     }
 
-    fn queue_output_until(&mut self, index: usize, deadline: Deadline) -> io::Result<()> {
+    fn queue_output_until(
+        &mut self,
+        index: usize,
+        deadline: Deadline,
+        stats: &mut StreamNextStats,
+    ) -> io::Result<()> {
         let mut v4l2_buf = v4l2_buffer {
             index: index as u32,
             ..self.buffer_desc()
@@ -223,8 +242,8 @@ impl<'a> Stream<'a> {
         v4l2_buf.bytesused = self.buf_meta[index].bytesused;
         v4l2_buf.field = self.buf_meta[index].field;
 
-        self.poll_until(libc::POLLOUT, deadline, "VIDIOC_QBUF")?;
-        Self::ioctl_until(deadline, "VIDIOC_QBUF", || unsafe {
+        self.poll_until(libc::POLLOUT, deadline, "VIDIOC_QBUF", stats)?;
+        Self::ioctl_until(deadline, "VIDIOC_QBUF", stats, || unsafe {
             v4l2::ioctl(
                 self.handle.fd(),
                 v4l2::vidioc::VIDIOC_QBUF,
@@ -236,10 +255,14 @@ impl<'a> Stream<'a> {
         Ok(())
     }
 
-    fn dequeue_until(&mut self, deadline: Deadline) -> io::Result<usize> {
+    fn dequeue_until(
+        &mut self,
+        deadline: Deadline,
+        stats: &mut StreamNextStats,
+    ) -> io::Result<usize> {
         let mut v4l2_buf = self.buffer_desc();
 
-        Self::ioctl_until(deadline, "VIDIOC_DQBUF", || unsafe {
+        Self::ioctl_until(deadline, "VIDIOC_DQBUF", stats, || unsafe {
             v4l2::ioctl(
                 self.handle.fd(),
                 v4l2::vidioc::VIDIOC_DQBUF,
@@ -260,22 +283,48 @@ impl<'a> Stream<'a> {
         Ok(index)
     }
 
-    fn dequeue_capture_until(&mut self, deadline: Deadline) -> io::Result<usize> {
-        self.poll_until(libc::POLLIN, deadline, "VIDIOC_DQBUF")?;
-        self.dequeue_until(deadline)
+    fn dequeue_capture_until(
+        &mut self,
+        deadline: Deadline,
+        stats: &mut StreamNextStats,
+    ) -> io::Result<usize> {
+        self.poll_until(libc::POLLIN, deadline, "VIDIOC_DQBUF", stats)?;
+        self.dequeue_until(deadline, stats)
     }
 
-    fn ensure_capture_started_until(&mut self, deadline: Deadline) -> io::Result<()> {
+    fn ensure_capture_started_until(
+        &mut self,
+        deadline: Deadline,
+        stats: &mut StreamNextStats,
+    ) -> io::Result<()> {
         while self.capture_initial_queue_index < self.arena.bufs.len() {
             let index = self.capture_initial_queue_index;
             if self.buffer_queued[index] {
                 self.capture_initial_queue_index += 1;
             } else {
-                self.queue_capture_until(index, deadline)?;
+                self.queue_capture_until(index, deadline, stats)?;
             }
         }
 
-        self.start_until(deadline)
+        self.start_until(deadline, stats)
+    }
+
+    pub fn next_with_stats(&mut self) -> io::Result<(&[u8], &Metadata, StreamNextStats)> {
+        let mut stats = StreamNextStats::default();
+        let deadline = self.timeout_deadline();
+        if !self.active {
+            self.ensure_capture_started_until(deadline, &mut stats)?;
+        } else if !self.buffer_queued[self.arena_index] {
+            self.queue_capture_until(self.arena_index, deadline, &mut stats)?;
+        }
+
+        self.dequeue_capture_until(deadline, &mut stats)?;
+
+        // The index used to access the buffer elements is given to us by v4l2, so we assume it
+        // will always be valid.
+        let bytes = &self.arena.bufs[self.arena_index];
+        let meta = &self.buf_meta[self.arena_index];
+        Ok((bytes, meta, stats))
     }
 }
 
@@ -335,55 +384,52 @@ impl<'a> StreamTrait for Stream<'a> {
     type Item = [u8];
 
     fn start(&mut self) -> io::Result<()> {
-        self.start_until(self.timeout_deadline())
+        self.start_until(self.timeout_deadline(), &mut StreamNextStats::default())
     }
 
     fn stop(&mut self) -> io::Result<()> {
-        self.stop_until(self.timeout_deadline())
+        self.stop_until(self.timeout_deadline(), &mut StreamNextStats::default())
     }
 }
 
 impl<'a, 'b> CaptureStream<'b> for Stream<'a> {
     fn queue(&mut self, index: usize) -> io::Result<()> {
-        self.queue_capture_until(index, self.timeout_deadline())
+        self.queue_capture_until(
+            index,
+            self.timeout_deadline(),
+            &mut StreamNextStats::default(),
+        )
     }
 
     fn dequeue(&mut self) -> io::Result<usize> {
-        self.dequeue_capture_until(self.timeout_deadline())
+        self.dequeue_capture_until(self.timeout_deadline(), &mut StreamNextStats::default())
     }
 
     fn next(&'b mut self) -> io::Result<(&'b Self::Item, &'b Metadata)> {
-        let deadline = self.timeout_deadline();
-        if !self.active {
-            self.ensure_capture_started_until(deadline)?;
-        } else if !self.buffer_queued[self.arena_index] {
-            self.queue_capture_until(self.arena_index, deadline)?;
-        }
-
-        self.dequeue_capture_until(deadline)?;
-
-        // The index used to access the buffer elements is given to us by v4l2, so we assume it
-        // will always be valid.
-        let bytes = &self.arena.bufs[self.arena_index];
-        let meta = &self.buf_meta[self.arena_index];
-        Ok((bytes, meta))
+        self.next_with_stats()
+            .map(|(bytes, meta, _stats)| (bytes, meta))
     }
 }
 
 impl<'a, 'b> OutputStream<'b> for Stream<'a> {
     fn queue(&mut self, index: usize) -> io::Result<()> {
-        self.queue_output_until(index, self.timeout_deadline())
+        self.queue_output_until(
+            index,
+            self.timeout_deadline(),
+            &mut StreamNextStats::default(),
+        )
     }
 
     fn dequeue(&mut self) -> io::Result<usize> {
-        self.dequeue_until(self.timeout_deadline())
+        self.dequeue_until(self.timeout_deadline(), &mut StreamNextStats::default())
     }
 
     fn next(&'b mut self) -> io::Result<(&'b mut Self::Item, &'b mut Metadata)> {
+        let mut stats = StreamNextStats::default();
         let deadline = self.timeout_deadline();
         let init = !self.active;
         if !self.active {
-            self.start_until(deadline)?;
+            self.start_until(deadline, &mut stats)?;
         }
 
         // Only queue and dequeue once the buffer has been filled at the call site. The initial
@@ -391,9 +437,9 @@ impl<'a, 'b> OutputStream<'b> for Stream<'a> {
         // allocated, meaning we need to return the empty buffer initially so it can be filled.
         if !init {
             if !self.buffer_queued[self.arena_index] {
-                self.queue_output_until(self.arena_index, deadline)?;
+                self.queue_output_until(self.arena_index, deadline, &mut stats)?;
             }
-            self.dequeue_until(deadline)?;
+            self.dequeue_until(deadline, &mut stats)?;
         }
 
         // The index used to access the buffer elements is given to us by v4l2, so we assume it
