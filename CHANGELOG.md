@@ -14,6 +14,10 @@ Multi-planar capture will not be targeted in the near future unless someone else
 - Support physical and `vivid` virtual V4L2 capture devices in the interrupt tests.
 - Add `V4L_INTERRUPT_TEST_SOURCE=physical|vivid|both` to select which interrupt-test device sources are attempted.
 
+### Fixed
+
+- Preserve MMAP stream buffer ownership state across interrupted queue/dequeue syscalls.
+
 ## [0.14.0] - 2023-05-13
 
 ### Added

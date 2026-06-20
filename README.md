@@ -39,8 +39,10 @@ Some integration tests exercise real V4L2 streaming behavior and therefore need 
 The `interrupts` test target can use either a physical camera or Linux's in-kernel `vivid`
 Virtual Video Test Driver.
 
-By default, the interrupt tests attempt both physical and vivid capture devices and skip any
-source that is not available. Set `V4L_INTERRUPT_TEST_SOURCE` to control this:
+By default, the interrupt tests attempt both physical and vivid capture devices. Physical-device
+tests skip when no physical capture device is available; vivid-device tests fail with setup
+instructions when no vivid capture device is available. Set `V4L_INTERRUPT_TEST_SOURCE` to control
+this:
 
 ```shell
 V4L_INTERRUPT_TEST_SOURCE=physical cargo test --test interrupts -- --show-output

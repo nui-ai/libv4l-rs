@@ -1,15 +1,12 @@
 use std::io;
 use std::mem;
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex, Once};
-use std::time::{Duration, Instant};
+use std::sync::{Mutex, Once};
 
 use v4l::buffer::Type;
 use v4l::capability::Flags;
 use v4l::context;
 use v4l::device::Device;
 use v4l::io::mmap::Stream;
-use v4l::io::traits::CaptureStream;
 
 pub(crate) const SOURCE_SELECTION_ENV: &str = "V4L_INTERRUPT_TEST_SOURCE";
 pub(crate) const INTERRUPT_SIGNAL: libc::c_int = libc::SIGUSR1;
@@ -165,64 +162,6 @@ impl Drop for SignalGuard {
         unsafe {
             libc::sigaction(INTERRUPT_SIGNAL, &self.old_action, std::ptr::null_mut());
             libc::pthread_sigmask(libc::SIG_SETMASK, &self.old_mask, std::ptr::null_mut());
-        }
-    }
-}
-
-pub(crate) fn run_stream_until_interrupted(
-    guard: Arc<SignalGuard>,
-    device_paths: Vec<std::path::PathBuf>,
-    status_tx: mpsc::Sender<StreamThreadStatus>,
-) -> io::Result<io::Error> {
-    if let Err(err) = guard.unblock_test_signal_on_current_thread() {
-        let setup_error = io::Error::new(err.kind(), err.to_string());
-        status_tx
-            .send(StreamThreadStatus::SetupFailed(setup_error))
-            .expect("publish stream thread setup failure");
-        return Err(err);
-    }
-
-    let (_device_path, mut stream) = match open_first_mmap_capture_stream(device_paths) {
-        Ok(stream) => stream,
-        Err(err) => {
-            let setup_error = io::Error::new(err.kind(), err.to_string());
-            status_tx
-                .send(StreamThreadStatus::SetupFailed(setup_error))
-                .expect("publish stream thread setup failure");
-            return Err(err);
-        }
-    };
-    stream.set_timeout(Duration::from_secs(1));
-
-    match stream.next() {
-        Ok((_buf, _meta)) => {}
-        Err(err) => {
-            let setup_error = io::Error::new(err.kind(), format!("warm up MMAP stream: {err}"));
-            status_tx
-                .send(StreamThreadStatus::SetupFailed(setup_error))
-                .expect("publish stream thread setup failure");
-            return Err(err);
-        }
-    };
-
-    status_tx
-        .send(StreamThreadStatus::Ready(unsafe { libc::pthread_self() }))
-        .expect("publish stream thread pthread id");
-
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match stream.next() {
-            Ok((_buf, _meta)) => {
-                if Instant::now() >= deadline {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "stream was not interrupted before the test deadline",
-                    ));
-                }
-            }
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => return Ok(err),
-            Err(err) if err.kind() == io::ErrorKind::TimedOut => continue,
-            Err(err) => return Err(err),
         }
     }
 }

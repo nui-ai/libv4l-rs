@@ -71,24 +71,24 @@ use std::io;
 
 use crate::helpers::DeviceSource;
 use crate::mmap_stream::{
-    mmap_stream_next_after_interrupted_next_exposes_queue_state_loss,
-    mmap_stream_next_can_be_interrupted_by_a_targeted_signal, FrameCollectionConfig,
-    InterruptInjection, DEFAULT_POST_READY_FRAME_COUNT, MIN_POST_READY_FRAME_COUNT,
+    mmap_stream_next_collects_ordered_frames, mmap_stream_next_handles_targeted_signals,
+    FrameCollectionConfig, InterruptInjection, DEFAULT_POST_READY_FRAME_COUNT,
+    MIN_POST_READY_FRAME_COUNT,
 };
 
 #[test]
-fn physical_mmap_stream_next_can_be_interrupted_by_a_targeted_signal() {
-    mmap_stream_next_can_be_interrupted_by_a_targeted_signal(DeviceSource::Physical);
+fn physical_mmap_stream_next_handles_targeted_signals() {
+    mmap_stream_next_handles_targeted_signals(DeviceSource::Physical);
 }
 
 #[test]
-fn vivid_mmap_stream_next_can_be_interrupted_by_a_targeted_signal() {
-    mmap_stream_next_can_be_interrupted_by_a_targeted_signal(DeviceSource::Vivid);
+fn vivid_mmap_stream_next_handles_targeted_signals() {
+    mmap_stream_next_handles_targeted_signals(DeviceSource::Vivid);
 }
 
 #[test]
-fn physical_mmap_stream_next_after_interrupted_next_exposes_queue_state_loss() {
-    mmap_stream_next_after_interrupted_next_exposes_queue_state_loss(
+fn physical_mmap_stream_next_after_targeted_signals_collects_ordered_frames() {
+    mmap_stream_next_collects_ordered_frames(
         DeviceSource::Physical,
         InterruptInjection::Enabled,
         FrameCollectionConfig::try_new(DEFAULT_POST_READY_FRAME_COUNT)
@@ -97,8 +97,8 @@ fn physical_mmap_stream_next_after_interrupted_next_exposes_queue_state_loss() {
 }
 
 #[test]
-fn vivid_mmap_stream_next_after_interrupted_next_exposes_queue_state_loss() {
-    mmap_stream_next_after_interrupted_next_exposes_queue_state_loss(
+fn vivid_mmap_stream_next_after_targeted_signals_collects_ordered_frames() {
+    mmap_stream_next_collects_ordered_frames(
         DeviceSource::Vivid,
         InterruptInjection::Enabled,
         FrameCollectionConfig::try_new(DEFAULT_POST_READY_FRAME_COUNT)
@@ -108,7 +108,7 @@ fn vivid_mmap_stream_next_after_interrupted_next_exposes_queue_state_loss() {
 
 #[test]
 fn physical_mmap_stream_next_without_interrupt_collects_ordered_frames() {
-    mmap_stream_next_after_interrupted_next_exposes_queue_state_loss(
+    mmap_stream_next_collects_ordered_frames(
         DeviceSource::Physical,
         InterruptInjection::Disabled,
         FrameCollectionConfig::try_new(DEFAULT_POST_READY_FRAME_COUNT)
@@ -118,7 +118,7 @@ fn physical_mmap_stream_next_without_interrupt_collects_ordered_frames() {
 
 #[test]
 fn vivid_mmap_stream_next_without_interrupt_collects_ordered_frames() {
-    mmap_stream_next_after_interrupted_next_exposes_queue_state_loss(
+    mmap_stream_next_collects_ordered_frames(
         DeviceSource::Vivid,
         InterruptInjection::Disabled,
         FrameCollectionConfig::try_new(DEFAULT_POST_READY_FRAME_COUNT)
