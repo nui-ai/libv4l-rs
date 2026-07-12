@@ -1,127 +1,19 @@
-# Safe video4linux (v4l) bindings
+# libv4l-rs fork for safer MMAP buffer management
 
-[![CI](https://github.com/raymanfx/libv4l-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/raymanfx/libv4l-rs/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/v4l.svg?logo=rust)](https://crates.io/crates/v4l)
-[![Documentation](https://docs.rs/v4l/badge.svg)](https://docs.rs/v4l)
-[![license](https://img.shields.io/github/license/raymanfx/libv4l-rs)](https://github.com/raymanfx/libv4l-rs/blob/master/LICENSE.txt)
+## Motivation: 
 
-This crate provides safe bindings to the Video for Linux (V4L) stack. Modern device drivers will usually implement the `v4l2` API while older ones may depend on the legacy `v4l` API. Such legacy devices may be used with this crate by choosing the `libv4l` feature for this crate.
+- [MMAP](https://man7.org/linux/man-pages/man2/mmap.2.html) is one of two buffering modes used by [the libv4l-rs crate](https://github.com/raymanfx/) for its key role of the transport of images into user space code in, as well as by our fork of it which you are looking at now.
+- Our crates use the MMAP mode, when using this crate for camera stream acquisition. 
+- The original crate does not robustly handle system interrupts in its implementation of MMAP buffering: https://github.com/raymanfx/libv4l-rs/pull/88.
 
-## Goals
+Hence, to avoid its interrupt handling fail cases give or take their performance impacts, we use our own fork, which makes the implementation of that buffer robust in the face of system interrupts.
 
-This crate shall provide the `v4l-sys` package to enable full (but unsafe) access to `libv4l*`.
-On top of that, there will be a high level, more idiomatic API to use video capture devices in Linux.
+The original implementation is also lacking in other areas of rubstness:
 
-There will be simple utility applications to list devices and capture frames.
-A minimalistic OpenGL/Vulkan viewer to display frames is planned for the future.
+- multi-planar gaps: https://github.com/raymanfx/libv4l-rs/issues/121
+- ARM64 mmap metadata initialization crash report:
+  https://github.com/raymanfx/libv4l-rs/issues/77
+- feature-selection cleanup is still pending upstream:
+  https://github.com/raymanfx/libv4l-rs/pull/110
 
-## Changelog
-
-See [CHANGELOG.md](./CHANGELOG.md)
-
-## Dependencies
-
-You have the choice between two dependencies (both provided by this crate internally):
-
-* `libv4l-sys`
-   > Link against the libv4l* stack including libv4l1, libv4l2, libv4lconvert.
-   > This has the advantage of emulating common capture formats such as RGB3 in userspace through libv4lconvert and more.
-   > However, some features like userptr buffers are not supported in libv4l.
-* `v4l2-sys`
-   > Use only the Linux kernel provided v4l2 API provided by videodev2.h.
-   > You get support for all v4l2 features such as userptr buffers, but may need to do format conversion yourself if you require e.g. RGB/BGR buffers which may not be supported by commodity devices such as webcams.
-
-Enable either the `libv4l` or the `v4l2` backend by choosing the it as feature for this crate.
-
-## Integration tests
-
-Some integration tests exercise real V4L2 streaming behavior and therefore need a capture device.
-The `interrupts` test target can use either a physical camera or Linux's in-kernel `vivid`
-Virtual Video Test Driver.
-
-By default, the interrupt tests attempt both physical and vivid capture devices. Physical-device
-tests skip when no physical capture device is available; vivid-device tests fail with setup
-instructions when no vivid capture device is available. Set `V4L_INTERRUPT_TEST_SOURCE` to control
-this:
-
-```shell
-V4L_INTERRUPT_TEST_SOURCE=physical cargo test --test interrupts -- --show-output
-V4L_INTERRUPT_TEST_SOURCE=vivid cargo test --test interrupts -- --show-output
-V4L_INTERRUPT_TEST_SOURCE=both cargo test --test interrupts -- --show-output
-```
-
-For a virtual capture device on Linux, load `vivid` before running the vivid tests:
-
-```shell
-sudo modprobe vivid n_devs=1 node_types=0x1
-cargo test --test interrupts -- --show-output
-sudo modprobe -r vivid
-```
-
-## Usage
-
-Below you can find a quick example usage of this crate. It introduces the basics necessary to do frame capturing from a streaming device (e.g. webcam).
-
-```rust
-use v4l::buffer::Type;
-use v4l::io::mmap::Stream;
-use v4l::io::traits::CaptureStream;
-use v4l::video::Capture;
-use v4l::Device;
-use v4l::FourCC;
-
-fn main() {
-    // Create a new capture device with a few extra parameters
-    let mut dev = Device::new(0).expect("Failed to open device");
-
-    // Let's say we want to explicitly request another format
-    let mut fmt = dev.format().expect("Failed to read format");
-    fmt.width = 1280;
-    fmt.height = 720;
-    fmt.fourcc = FourCC::new(b"YUYV");
-    let fmt = dev.set_format(&fmt).expect("Failed to write format");
-
-    // The actual format chosen by the device driver may differ from what we
-    // requested! Print it out to get an idea of what is actually used now.
-    println!("Format in use:\n{}", fmt);
-
-    // Now we'd like to capture some frames!
-    // First, we need to create a stream to read buffers from. We choose a
-    // mapped buffer stream, which uses mmap to directly access the device
-    // frame buffer. No buffers are copied nor allocated, so this is actually
-    // a zero-copy operation.
-
-    // To achieve the best possible performance, you may want to use a
-    // UserBufferStream instance, but this is not supported on all devices,
-    // so we stick to the mapped case for this example.
-    // Please refer to the rustdoc docs for a more detailed explanation about
-    // buffer transfers.
-
-    // Create the stream, which will internally 'allocate' (as in map) the
-    // number of requested buffers for us.
-    let mut stream = Stream::with_buffers(&mut dev, Type::VideoCapture, 4)
-        .expect("Failed to create buffer stream");
-
-    // At this point, the stream is ready and all buffers are setup.
-    // We can now read frames (represented as buffers) by iterating through
-    // the stream. Once an error condition occurs, the iterator will return
-    // None.
-    loop {
-        let (buf, meta) = stream.next().unwrap();
-        println!(
-            "Buffer size: {}, seq: {}, timestamp: {}",
-            buf.len(),
-            meta.sequence,
-            meta.timestamp
-        );
-
-        // To process the captured data, you can pass it somewhere else.
-        // If you want to modify the data or extend its lifetime, you have to
-        // copy it. This is a best-effort tradeoff solution that allows for
-        // zero-copy readers while enforcing a full clone of the data for
-        // writers.
-    }
-}
-```
-
-Have a look at the provided `examples` for more sample applications.
+For the original documentation of the original crate see the original crate at https://github.com/raymanfx/.
